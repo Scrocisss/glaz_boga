@@ -7,9 +7,9 @@ from deep_translator import GoogleTranslator
 from collections import Counter
 
 # Настройки
-TELEGRAM_TOKEN = 'YOUR_TELEGRAM_TOKEN'
-VK_APP_ID = 'YOUR_VK_APP_ID'
-VK_APP_SECRET = 'YOUR_VK_APP_SECRET'
+TELEGRAM_TOKEN = '7915283986:AAFIocGTVRJrVPMp0_ON1eJTH067AFODCyA'
+VK_APP_ID = '52617075'
+VK_APP_SECRET = 'qfDpuDhGN2zE7aSathiP'
 VK_API_VERSION = '5.131'
 
 
@@ -85,19 +85,6 @@ def format_personal_info(personal_info, language):
     return ', '.join(f"{personal_fields.get(k, k)}: {v}" for k, v in personal_info.items() if v and not isinstance(v, list))
 
 
-# Форматирование информации о школах
-def format_schools(schools, language):
-    school_info = []
-    for school in schools:
-        school_name = school.get('name', '')
-        city = school.get('city', '')
-        year_from = school.get('year_from', '')
-        year_to = school.get('year_to', '')
-        year_graduated = school.get('year_graduated', '')
-        school_info.append(f"{school_name} ({year_from}-{year_to or year_graduated})")
-    return "\n".join(school_info)
-
-
 # Получение имени и фамилии родственников
 def get_relative_names(relatives, language):
     if not relatives:
@@ -128,9 +115,107 @@ def format_value(value, language):
     return translate_text(str(value), language)
 
 
-# Остальные части кода остаются без изменений, включая обработку команды `/start` и выбор языка.
+# Получение числового ID пользователя
+def get_vk_user_id(vk_id):
+    try:
+        if vk_id.isdigit():
+            return int(vk_id)
+        response = vk.users.get(user_ids=vk_id)
+        return response[0]['id'] if response else None
+    except Exception as e:
+        print(f"Ошибка при получении ID пользователя: {e}")
+        return None
 
-# Обработка ссылки с улучшенным форматированием для "Школы", "Личное" и "Работа" (не переводится)
+
+# Получение информации о пользователе ВКонтакте
+def fetch_vk_info(vk_id):
+    try:
+        response = vk.users.get(
+            user_ids=vk_id,
+            fields="first_name, last_name, maiden_name, screen_name, sex, relation, relation_partner, bdate, "
+                   "bdate_visibility, home_town, country, city, status, phone, verified, online, universities, "
+                   "schools, occupation, personal, interests, movies, tv, books, games, about, quotes, relatives",
+            v=VK_API_VERSION
+        )
+        return response[0] if response else None
+    except Exception as e:
+        print(f"Ошибка при запросе к API ВКонтакте: {e}")
+        return None
+
+
+# Получение списка друзей и их городов
+def fetch_vk_friends(vk_id, language):
+    try:
+        friends = vk.friends.get(user_id=vk_id, fields="city")
+        if 'items' not in friends:
+            raise Exception("Profile is private")
+
+        city_counter = Counter()
+        for friend in friends['items']:
+            city_title = friend.get('city', {}).get('title')
+            if city_title:
+                city_counter[city_title] += 1
+
+        sorted_cities = sorted(city_counter.items(), key=lambda x: x[1], reverse=True)
+        filtered_cities = {city: count for city, count in sorted_cities if count >= 3}
+
+        if filtered_cities:
+            response = "\n".join(
+                [f"{translate_text(city, language)}: {count}" for city, count in filtered_cities.items()])
+        else:
+            response = translate_text("Profile is private.", language)
+
+        return response
+
+    except Exception as e:
+        print(f"Ошибка при получении друзей: {e}")
+        return translate_text("Profile is private.", language)
+
+
+# Получение списка подписок
+def fetch_vk_subscriptions(vk_id, language):
+    try:
+        subscriptions = vk.users.getSubscriptions(user_id=vk_id, extended=1)
+        if subscriptions['count'] == 0:
+            return translate_text("Profile is private.", language)
+        return "\n".join([f"{s['name']} (https://vk.com/{s['screen_name']})" for s in subscriptions['items']])
+    except Exception as e:
+        print(f"Ошибка при получении подписок: {e}")
+        return translate_text("Profile is private.", language)
+
+
+# Команда /start
+async def start(update: Update, context: CallbackContext):
+    keyboard = [
+        [InlineKeyboardButton("🇷🇺 Русский", callback_data='lang_ru')],
+        [InlineKeyboardButton("🇬🇧 English", callback_data='lang_en')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("Выберите язык / Choose a language:", reply_markup=reply_markup)
+
+
+# Установка языка
+async def set_language(update: Update, context: CallbackContext):
+    query = update.callback_query
+    await query.answer()
+    context.user_data['language'] = 'ru' if query.data == 'lang_ru' else 'en'
+    msg = "Язык установлен на русский.\nВведите ссылку на страницу ВК, либо id пользователя." if query.data == 'lang_ru' else "Language set to English.\nEnter the link to the VK page or the user ID."
+    await query.edit_message_text(msg)
+
+
+# Другие части кода остаются такими же...
+
+# Форматирование данных с фиксированным отступом для значений
+def format_data_with_fixed_value_alignment(data, value_start_pos=30):
+    formatted_data = []
+    for label, value in data:
+        # Вычисляем отступ для значения, чтобы оно начиналось с одной вертикальной линии
+        spaces = " " * (value_start_pos - len(label) - 2)  # -2 для ": " после label
+        formatted_label = f"{label}:"
+        formatted_data.append(f"{formatted_label}{spaces}{value}")
+    return "\n".join(formatted_data)
+
+# Обработка ссылки с фиксированным выравниванием значений
 async def handle_link(update: Update, context: CallbackContext):
     vk_id_input = update.message.text.strip().split('/')[-1]
     vk_id = get_vk_user_id(vk_id_input)
@@ -146,6 +231,7 @@ async def handle_link(update: Update, context: CallbackContext):
 
     if user_info:
         data = []
+        # Принудительно переводим полное имя
         full_name = translate_text(f"{user_info.get('first_name', '')} {user_info.get('last_name', '')}", target_lang)
         if full_name.strip():
             data.append([f"👤 Name", full_name])
@@ -182,18 +268,19 @@ async def handle_link(update: Update, context: CallbackContext):
             elif field == "city":
                 value = user_info['city'].get("title") if user_info.get('city') else None
             elif field == "occupation":
-                value = user_info['occupation'].get("name")  # Поле "Работа" не переводим
+                value = user_info['occupation'].get("name") if user_info.get('occupation') else None
             elif field == "personal":
                 value = format_personal_info(value, target_lang) if value else None
             elif field == "relatives":
                 value = get_relative_names(value, target_lang)
-            elif field == "schools":
-                value = format_schools(value, target_lang)
             elif field == "status":
                 value = wrap_text(value)
 
             if value:
-                data.append([f"{icon} {translate_text(label, target_lang)}", value])
+                if field == "screen_name":
+                    data.append([f"{icon} {translate_text(label, target_lang)}", value])
+                else:
+                    data.append([f"{icon} {translate_text(label, target_lang)}", format_value(value, target_lang)])
 
         # Форматируем данные с фиксированным выравниванием значений
         response = format_data_with_fixed_value_alignment(data, value_start_pos=30)
