@@ -257,12 +257,6 @@ def format_data_with_fixed_value_alignment(data):
     return "\n".join(formatted_data)
 
 
-
-
-# Обработка ссылки с фиксированным выравниванием значений
-import html
-from telegram import InputMediaPhoto
-
 # Обработка ссылки с фиксированным выравниванием значений
 async def handle_link(update: Update, context: CallbackContext):
     vk_id_input = update.message.text.strip().split('/')[-1]
