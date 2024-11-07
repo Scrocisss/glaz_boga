@@ -5,6 +5,8 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from tabulate import tabulate
 from deep_translator import GoogleTranslator
 from collections import Counter
+from telegram import InputMediaPhoto
+import html
 
 # Настройки
 TELEGRAM_TOKEN = '7915283986:AAFIocGTVRJrVPMp0_ON1eJTH067AFODCyA'
@@ -173,19 +175,22 @@ def get_vk_user_id(vk_id):
 
 
 # Получение информации о пользователе ВКонтакте
+# Получение информации о пользователе ВКонтакте
 def fetch_vk_info(vk_id):
     try:
         response = vk.users.get(
             user_ids=vk_id,
             fields="first_name, last_name, maiden_name, screen_name, sex, relation, relation_partner, bdate, "
                    "bdate_visibility, home_town, country, city, status, phone, verified, online, universities, "
-                   "schools, occupation, personal, interests, movies, tv, books, games, about, quotes, relatives",
+                   "schools, occupation, personal, interests, movies, tv, books, games, about, quotes, relatives, "
+                   "photo_max",
             v=VK_API_VERSION
         )
         return response[0] if response else None
     except Exception as e:
         print(f"Ошибка при запросе к API ВКонтакте: {e}")
         return None
+
 
 
 # Получение списка друзей и их городов
@@ -202,7 +207,7 @@ def fetch_vk_friends(vk_id, language):
                 city_counter[city_title] += 1
 
         sorted_cities = sorted(city_counter.items(), key=lambda x: x[1], reverse=True)
-        filtered_cities = {city: count for city, count in sorted_cities if count >= 3}
+        filtered_cities = {city: count for city, count in sorted_cities if count >= 5}
 
         if filtered_cities:
             response = "\n".join(
@@ -252,6 +257,12 @@ def format_data_with_fixed_value_alignment(data):
     return "\n".join(formatted_data)
 
 
+
+
+# Обработка ссылки с фиксированным выравниванием значений
+import html
+from telegram import InputMediaPhoto
+
 # Обработка ссылки с фиксированным выравниванием значений
 async def handle_link(update: Update, context: CallbackContext):
     vk_id_input = update.message.text.strip().split('/')[-1]
@@ -269,9 +280,12 @@ async def handle_link(update: Update, context: CallbackContext):
     if user_info:
         data = []
 
+        # Сохраняем URL фотографии профиля для использования в сообщении
+        photo_url = user_info.get("photo_max")
+
         # Принудительно переводим полное имя
         full_name = translate_text(f"{user_info.get('first_name', '')} {user_info.get('last_name', '')}", target_lang)
-        if full_name.strip() and full_name.lower() not in ["none", "no information", "нет информации", "информация отсутствует"]:
+        if full_name.strip():
             data.append([f"👤 Имя" if target_lang == 'ru' else "👤 Name", full_name])
 
         # Обновленный словарь полей
@@ -358,18 +372,15 @@ async def handle_link(update: Update, context: CallbackContext):
             elif field == "status":
                 value = wrap_text(value)
 
-            # Переводим заголовки в зависимости от выбранного языка
-            translated_label = label if target_lang == 'ru' else field_translations.get(label, label)
-
             # Проверка на отсутствие информации и исключение пустых полей
-            if value and value.lower() not in ["none", "no information", "нет информации", "информация отсутствует"]:
-                data.append([f"{icon} {translated_label}", value])
+            if value and isinstance(value, str) and value.lower() not in ["none", "no information", "нет информации", "информация отсутствует"]:
+                data.append([f"{icon} {label if target_lang == 'ru' else field_translations.get(label)}", value])
 
         # Обработка поля "Личное" отдельно, чтобы добавить вложенные значения с отступом и смайликом
         personal_info = user_info.get("personal")
         if personal_info:
             personal_formatted = format_personal_info(personal_info, target_lang)
-            if personal_formatted and personal_formatted.lower() not in ["none", "no information", "нет информации", "информация отсутствует"]:
+            if personal_formatted and isinstance(personal_formatted, str) and personal_formatted.lower() not in ["none", "no information", "нет информации", "информация отсутствует"]:
                 data.append([f"🤫 Личное" if target_lang == 'ru' else "🤫 Personal", personal_formatted])
 
         # Форматируем данные с фиксированным выравниванием значений
@@ -381,14 +392,20 @@ async def handle_link(update: Update, context: CallbackContext):
             response += f"\n\n{friends_header}\n{friends_info}"
 
         # Добавляем подписки, если информация доступна и не является "Profile is private"
-        if subscriptions_info and subscriptions_info.lower() not in ["none", "no information", "нет информации", "profile is private"]:
-            subscriptions_header = "📌 Подписки:" if target_lang == 'ru' else "📌 Subscriptions:"
-            response += f"\n\n{subscriptions_header}\n{subscriptions_info}"
+#        if subscriptions_info and subscriptions_info.lower() not in ["none", "no information", "нет информации", "profile is private"]:
+#            subscriptions_header = "📌 Подписки:" if target_lang == 'ru' else "📌 Subscriptions:"
+#            response += f"\n\n{subscriptions_header}\n{subscriptions_info}"
+
+        # Используем html.escape для предотвращения ошибок разметки и отправляем фото и текст вместе
+        escaped_response = html.escape(response)
+        if photo_url:
+            await update.message.reply_photo(photo=photo_url, caption=f"<pre>{escaped_response}</pre>", parse_mode="HTML")
 
     else:
         response = translate_text("Информация о пользователе не найдена.", target_lang)
+        await update.message.reply_text(f"<pre>{html.escape(response)}</pre>", parse_mode="HTML")
 
-    await update.message.reply_text(f"```\n{response}\n```", parse_mode="Markdown")
+
 
 
 def format_universities(universities, language):
