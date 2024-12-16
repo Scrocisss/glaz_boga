@@ -14,8 +14,6 @@ current_credential_index = 0
 
 
 
-first_name = user_info.get("first_name")
-last_name = user_info.get("last_name")
 # Получение сервисного токена VK
 def get_service_token():
     global current_credential_index
@@ -172,29 +170,67 @@ def fetch_vk_info(vk_id):
         return None
 
 
-
-# Получение списка друзей и их городов
-def fetch_vk_friends(vk_id, language):
+def fetch_vk_friends(vk_id, language, user_last_name):
     try:
-        friends = vk.friends.get(user_id=vk_id, fields="city")
+        # Получаем список друзей пользователя
+        friends = vk.friends.get(user_id=vk_id, fields="city,last_name")
+
+        # Проверка на доступность профиля
         if 'items' not in friends:
             raise Exception("Profile is private")
-        city_counter = Counter()
+
+        city_counter = Counter()  # Счетчик для городов друзей
+        relatives_info = []  # Список для родственников
+
+        # Функция для проверки совпадения фамилии с учетом женской формы
+        def check_last_name_match(friend_last_name, user_last_name):
+            # Если фамилия друга совпадает с фамилией пользователя или женская форма фамилии
+            return friend_last_name == user_last_name or friend_last_name == user_last_name + 'a'
+
+        # Итерируем по друзьям
         for friend in friends['items']:
-            city_title = friend.get('city', {}).get('title')
+            city_title = friend.get('city', {}).get('title')  # Город друга
+            friend_last_name = friend.get('last_name')  # Фамилия друга
+
+            # Добавляем город друга в счетчик
             if city_title:
                 city_counter[city_title] += 1
+
+            # Проверяем, если фамилия друга совпадает с фамилией пользователя (учитывая женскую форму)
+            if check_last_name_match(friend_last_name, user_last_name):
+                relative_name = f"{friend.get('first_name')} {friend_last_name}"
+                relatives_info.append(relative_name)
+
+        # Сортировка городов друзей по количеству встреч
         sorted_cities = sorted(city_counter.items(), key=lambda x: x[1], reverse=True)
         filtered_cities = {city: count for city, count in sorted_cities if count >= 5}
+
+        # Формирование ответа по городам друзей
+        cities_response = ""
         if filtered_cities:
-            response = "\n".join(
+            cities_response = "\n".join(
                 [f"{translate_text(city, language)}: {count}" for city, count in filtered_cities.items()])
         else:
-            response = translate_text("Profile is private.", language)
-        return response
+            cities_response = translate_text("Profile is private.", language)
+
+        # Формирование ответа по родственникам
+        relatives_response = ""
+        if relatives_info:
+            relatives_header = "👨‍👩‍👧‍👦 Анализ родственников:" if language == 'ru' else "👨‍👩‍👧‍👦 Relatives analysis:"
+            relatives_response = f"\n{relatives_header}\n" + "\n".join(relatives_info)
+
+        # Объединение данных и возврат без повторений
+        if cities_response.strip() and relatives_response.strip():
+            return f"{cities_response}\n{relatives_response}"
+
+        # Возвращаем только один из блоков, если второй пустой
+        return cities_response if cities_response.strip() else relatives_response
+
     except Exception as e:
         print(f"Ошибка при получении друзей: {e}")
         return translate_text("Profile is private.", language)
+
+
 
 
 # Получение списка подписок
@@ -227,7 +263,6 @@ def format_data_with_fixed_value_alignment(data):
     return "\n".join(formatted_data)
 
 
-# Обработка ссылки с фиксированным выравниванием значений
 async def handle_link(update: Update, context: CallbackContext):
     vk_id_input = update.message.text.strip().split('/')[-1]
     vk_id = get_vk_user_id(vk_id_input)
@@ -237,14 +272,19 @@ async def handle_link(update: Update, context: CallbackContext):
     language = context.user_data.get('language', 'ru')
     target_lang = 'ru' if language == 'ru' else 'en'
     user_info = fetch_vk_info(vk_id)
-    friends_info = fetch_vk_friends(vk_id, target_lang)
+    # Теперь передаем фамилию пользователя в fetch_vk_friends для поиска родственников
+    user_last_name = user_info.get("last_name", "")  # Получаем фамилию пользователя
+    friends_info = fetch_vk_friends(vk_id, target_lang, user_last_name)  # Анализируем друзей и родственников
     subscriptions_info = fetch_vk_subscriptions(vk_id, target_lang)
+
     if user_info:
         data = []
         photo_url = user_info.get("photo_max")
         full_name = translate_text(f"{user_info.get('first_name', '')} {user_info.get('last_name', '')}", target_lang)
         if full_name.strip():
             data.append([f"👤 Имя" if target_lang == 'ru' else "👤 Name", full_name])
+
+        # Поля и переводы для вывода
         fields = {
             "Пол": "sex", "Девичья фамилия": "maiden_name", "Короткое имя": "screen_name",
             "Семейное положение": "relation", "Партнер": "relation_partner", "Дата рождения": "bdate",
@@ -286,12 +326,13 @@ async def handle_link(update: Update, context: CallbackContext):
             "О себе": "About",
             "Родственники": "Relatives"
         }
+
+        # Обработка стандартных полей
         for label, field in fields.items():
             value = user_info.get(field)
             icon = icons.get(label, "")
             if field == "bdate":
                 continue
-                #value = format_bdate(value, target_lang) if value else None
             elif field == "sex":
                 value = "Мужской" if value == 2 else "Женский" if value == 1 else None
                 if target_lang == 'en':
@@ -321,26 +362,37 @@ async def handle_link(update: Update, context: CallbackContext):
                 value = get_relative_names(value, target_lang)
             elif field == "status":
                 value = wrap_text(value)
-            if value and isinstance(value, str) and value.lower() not in ["none", "no information", "нет информации", "информация отсутствует"]:
+            if value and isinstance(value, str) and value.lower() not in ["none", "no information", "нет информации",
+                                                                          "информация отсутствует"]:
                 data.append([f"{icon} {label if target_lang == 'ru' else field_translations.get(label)}", value])
+
         personal_info = user_info.get("personal")
         if personal_info:
             personal_formatted = format_personal_info(personal_info, target_lang)
-            if personal_formatted and isinstance(personal_formatted, str) and personal_formatted.lower() not in ["none", "no information", "нет информации", "информация отсутствует"]:
+            if personal_formatted and isinstance(personal_formatted, str) and personal_formatted.lower() not in ["none",
+                                                                                                                 "no information",
+                                                                                                                 "нет информации",
+                                                                                                                 "информация отсутствует"]:
                 data.append([f"🤫 Личное" if target_lang == 'ru' else "🤫 Personal", personal_formatted])
+
         response = format_data_with_fixed_value_alignment(data)
-        if friends_info and friends_info.lower() not in ["none", "no information", "нет информации", "profile is private"]:
+
+        # Анализ городов друзей (обновленный заголовок)
+        if friends_info and friends_info.lower() not in ["none", "no information", "нет информации",
+                                                         "profile is private"]:
             friends_header = "🌍 Анализ городов друзей:" if target_lang == 'ru' else "🌍 Friends cities analysis:"
             response += f"\n\n{friends_header}\n{friends_info}"
+
+        # Анализ родственников (теперь выводится только один раз)
+        if friends_info and "Анализ родственников" in friends_info:
+            relatives_header = "👨‍👩‍👧‍👦 Анализ родственников:" if target_lang == 'ru' else "👨‍👩‍👧‍👦 Relatives analysis:"
+            response += f""
+
+        # Отправка сообщения
         escaped_response = html.escape(response)
         if photo_url:
-            await update.message.reply_photo(photo=photo_url, caption=f"<pre>{escaped_response}</pre>", parse_mode="HTML")
-
-    else:
-        response = translate_text("Информация о пользователе не найдена.", target_lang)
-        await update.message.reply_text(f"<pre>{html.escape(response)}</pre>", parse_mode="HTML")
-
-
+            await update.message.reply_photo(photo=photo_url, caption=f"<pre>{escaped_response}</pre>",
+                                             parse_mode="HTML")
 
 
 def format_universities(universities, language):
